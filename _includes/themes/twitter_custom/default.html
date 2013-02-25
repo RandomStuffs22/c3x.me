@@ -14,10 +14,14 @@
       <script src="http://html5shim.googlecode.com/svn/trunk/html5.js"></script>
     <![endif]-->
 
+    <link href='http://fonts.googleapis.com/css?family=Armata|Source+Code+Pro' rel='stylesheet' type='text/css'>
+
+
     <!-- Le styles -->
     <link href="{{ ASSET_PATH }}/bootstrap/css/bootstrap.2.2.2.min.css" rel="stylesheet">
     <link href="{{ ASSET_PATH }}/css/style.css?body=1" rel="stylesheet" type="text/css" media="all">
 
+    <link href="{{ ASSET_PATH }}/css/custom.css" rel="stylesheet">
     <!-- Le fav and touch icons -->
   <!-- Update these with your own images
     <link rel="shortcut icon" href="images/favicon.ico">
@@ -30,6 +34,8 @@
     <link href="{{ BASE_PATH }}{{ site.JB.atom_path }}" type="application/atom+xml" rel="alternate" title="Sitewide ATOM Feed">
     <link href="{{ BASE_PATH }}{{ site.JB.rss_path }}" type="application/rss+xml" rel="alternate" title="Sitewide RSS Feed">
 
+
+    
   </head>
 
   <body>
@@ -53,9 +59,15 @@
       </div>
       <hr>
       <footer>
+        <p>
+            <a href="/about">about the author</a> &bull; 
+            <a href="http://twitter.com/court3nay">@court3nay on twitter</a> &bull; 
+            <a href="http://github.com/courtenay">courtenay at github</a> &bull;
+            <a href="http://soundcloud.com/f3mr">f3mr on soundcloud</a>
+        </p>
         <p>&copy; {{ site.time | date: '%Y' }} {{ site.author.name }}
-          with help from <a href="http://jekyllbootstrap.com" target="_blank" title="The Definitive Jekyll Blogging Framework">Jekyll Bootstrap</a>
-          and <a href="http://twitter.github.com/bootstrap/" target="_blank">Twitter Bootstrap</a>
+          - another fucking <a href="http://jekyllbootstrap.com" target="_blank" title="The Definitive Jekyll Blogging Framework">Jekyll Bootstrap</a>
+          and <a href="http://twitter.github.com/bootstrap/" target="_blank">Twitter Bootstrap</a> site.
         </p>
       </footer>
 
