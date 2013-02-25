@@ -5,6 +5,8 @@ http://c3x.me/atom.xml
 http://c3x.me/categories.html
 http://c3x.me/index.html
 http://c3x.me/pages.html
+http://c3x.me/projects.html
+http://c3x.me/projects.html
 http://c3x.me/rss.xml
 http://c3x.me/sitemap.txt
 http://c3x.me/tags.html
