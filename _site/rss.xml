@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0">
+<channel>
+        <title>c3x.me</title>
+        <description>c3x.me - court3nay</description>
+        <link>http://c3x.me</link>
+        <link>http://c3x.me</link>
+        <lastBuildDate>2013-02-24T22:40:13-08:00</lastBuildDate>
+        <pubDate>2013-02-24T22:40:13-08:00</pubDate>
+        <ttl>1800</ttl>
+
+
+        <item>
+                <title>Bridging AWS security groups with OpenVPN, for ElasticSearch</title>
+                <description>&lt;div class='intro'&gt;
+&lt;p&gt;Recently we moved a bunch of infrastructure off EngineYard onto AWS. If you&amp;#8217;re not familiar, EngineYard is a platform which itself is hosted on AWS. We had our entire stack (including elasticsearch) hosted with them, but they didn&amp;#8217;t support elasticsearch and so we were effectively paying a 2-3x premium (!) for the convenience of hosting and a simple-ish setup.&lt;/p&gt;
+
+&lt;p&gt;The goal was to move the elasticsearch install onto our own raw AWS setup, thus saving about $1,500 per month (!) with no downtime. Here&amp;#8217;s how I did it, and You Can Too(tm). This requires you to know how to install and run Chef recipes on at least one new box. Trust me, it&amp;#8217;s faster to set up a hosted chef account with opscode, and get it working, than it is to figure out how to install OpenVPN with self-signed CA and certs.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href='http://elasticsearch.org'&gt;Elasticsearch&lt;/a&gt; is a tricky customer because it has a discovery protocol where it communicates its public IP address with other nodes in the cluster, and you can&amp;#8217;t easily configure how this happens. I couldn&amp;#8217;t find any other documentation or posts about the topic, so I&amp;#8217;m recording it for posterity here. It also is completely unsecure, which means, opening it up to the wider internet is Very Bad. It communicates to your app over http (port 9200) and with itself over TCP (9300), so we can&amp;#8217;t just use http-auth and SSL. So, openVPN.&lt;/p&gt;
+
+&lt;p&gt;This technique is usable any other time you want to bridge security groups where you don&amp;#8217;t own them all, but have ssh/root access to the individual servers. (AWS allows you to open up ports between your own groups)&lt;/p&gt;
+&lt;/div&gt;&lt;div class='tldr'&gt;
+&lt;h2&gt;Overview&lt;/h2&gt;
+
+&lt;p&gt;We&amp;#8217;re going to set up a routed-tunnel openVPN network, set up new elasticsearch servers outside the security group, then tweak elasticsearch to gossip/communicate with its other nodes with some IPtables routing tricks. Finally, we&amp;#8217;ll secure the new install with HAproxy.&lt;/p&gt;
+&lt;/div&gt;
+&lt;h2 id='openvpn'&gt;OpenVPN&lt;/h2&gt;
+
+&lt;p&gt;OpenVPN is fantastic, but complex. It creates a virtual network on any set of machines that can communicate with each other over TCP. It creates a new virtual network card (interface) with its own new IP address, so you can seamlessly communicate as though all machines were on a local network together. You can &lt;a href='http://openvpn.net/index.php/open-source/documentation/howto.html'&gt;read all about it&lt;/a&gt; at their excellent site, but I&amp;#8217;ve saved you most of the work here below.&lt;/p&gt;
+
+&lt;p&gt;The easiest way to install it is via the &lt;a href='http://community.opscode.com/cookbooks/openvpn'&gt;Chef recipe&lt;/a&gt; - this recipe solves most of the issues you&amp;#8217;ll have generating certificate authorities and keys and so on. If you are a glutton for punishment, you will need to create a bunch of self-signed certs, and have a signing authority working. I tried to do this for a whole day and ended up with the chef recipe that does it magically.&lt;/p&gt;
+
+&lt;p&gt;So, first you set up the openVPN server. This box will be the conduit for all traffic. In our testing, a small instance was big enough for a cluster of three 2XL machines running at about 20% load. Let&amp;#8217;s assume you have your chef recipes uploaded and working with knife, and that we&amp;#8217;re using chef-solo and the hosted solution.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;[dev] $ knife ec2 server create -f m1.small -I ami-3d4ff254 -N openvpn --sudo&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;(be sure and apt-get update and apt-get upgrade before you do anything)&lt;/p&gt;
+
+&lt;p&gt;To install the openVPN server, you just set the node&amp;#8217;s run_list to recipe&lt;span&gt;openvpn&lt;/span&gt;.&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;[dev] $ knife node run_list add openvpn &amp;#39;recipe[openvpn],recipe[openvpn::users]&amp;#39;&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Create a data bag called &amp;#8220;users&amp;#8221;, so that it looks like this&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;[dev] $ knife data bag create users elast1&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;With the contents consisting of only an &lt;code&gt;id&lt;/code&gt;&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;{ id: &amp;quot;elast1&amp;quot; }&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Create a users data bag for each of your &amp;#8216;old&amp;#8217; servers (elast1, elast2, etc), and a bag for each of your new servers.&lt;/p&gt;
+
+&lt;p&gt;Now, run &lt;code&gt;chef-solo&lt;/code&gt; on your openvpn server and it should install and create a bunch of .tgz files, one for each client machine, in &lt;code&gt;/etc/openvpn/keys&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Make sure it all starts up OK (&lt;code&gt;sudo /etc/init.d/openvpn start&lt;/code&gt; and &lt;code&gt;sudo ifconfig&lt;/code&gt; should show a &amp;#8220;tun&amp;#8221; interface with IP of 10.8.0.0), and then we can install the clients.&lt;/p&gt;
+
+&lt;p&gt;Now edit the security group (in the AWS web app) and open port 1194 TCP for this machine.&lt;/p&gt;
+
+&lt;h2 id='openvpn_clients'&gt;OpenVPN Clients&lt;/h2&gt;
+
+&lt;p&gt;Now, on your &amp;#8216;old&amp;#8217; machines, you want to set up openVPN clients. We don&amp;#8217;t need chef here; it&amp;#8217;s a one-liner, and these boxes are going to die soon anyway. (EngineYard uses gentoo, so we need emerge. You may need to unfuck their packages.mask)&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;sudo emerge openvpn&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;Now, you want to edit /etc/openvpn/cilent.conf and set it to someting like this:&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;client
+
+dev tun
+proto udp
+port 1194
+persist-tun
+persist-key
+keepalive 10 60
+
+remote ec2-12-34-56.compute-1.amazonaws.com 1194
+
+cert /etc/openvpn/keys/elast1.crt
+key  /etc/openvpn/keys/elast1.key
+ca   /etc/openvpn/keys/ca.crt
+
+comp-lzo
+
+tls-auth /etc/openvpn/keys/ta.key 1&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;..replacing the compute-1 address with that of your openvpn server. Copy the tgz of certificate files you just generated with the chef-solo run from the server and unzip them. You also need to copy ta.key from the server.&lt;/p&gt;
+
+&lt;p&gt;Now, start openvpn on the client, and it should magically work; check &lt;code&gt;sudo ifconfig&lt;/code&gt; and see if you have an ip address (again, in the range 10.8.0.x). You should be able to ping 10.8.0.1. You should also be able to &lt;code&gt;curl http://10.8.0.4:9200&lt;/code&gt; (replace with actual IP of another elasticsearch machine) and get results! Do this on each machine, and note their individual IP addresses for this new interface.&lt;/p&gt;
+
+&lt;h2 id='new_boxes'&gt;New boxes&lt;/h2&gt;
+
+&lt;p&gt;Now, setup some new machines in your own AWS account with elasticsearch on them (no data yet). Install openVPN on them, the same as above. You should be able to curl the elasticsearch on the &amp;#8216;old&amp;#8217; machines via their new 10.8.x IP addresses.&lt;/p&gt;
+
+&lt;p&gt;Next we need to do some magic. Because Elasticsearch likes to communicate on startup and give out its own &amp;#8216;real&amp;#8217; IP address, you want to trick the machines into communicating. The most evil way is with IPtables (note: you should read up on IPtables and how to save/load it on restart)&lt;/p&gt;
+
+&lt;p&gt;Make a list of every IP address: the amazon IP (looks something like 10.220.123.82) with its corresponding vpn IP (looks like 10.8.0.24). On each client machine, you want to run this set of commands for each pair other than the current box (as root).&lt;/p&gt;
+
+&lt;pre&gt;&lt;code&gt;# iptables -t nat -A OUTPUT -d 10.220.123.72/32 -p tcp -m tcp --dport 9200 -j DNAT --to-destination 10.8.0.24:9200
+# iptables -t nat -A OUTPUT -d 10.220.123.72/32 -p tcp -m tcp --dport 9300 -j DNAT --to-destination 10.8.0.24:9300
+# iptables -t nat -A OUTPUT -d 10.220.123.72/32 -p udp -m udp --dport 9300 -j DNAT --to-destination 10.8.0.24:9300
+# ip route add 10.220.123.72/32 dev tun0&lt;/code&gt;&lt;/pre&gt;
+
+&lt;p&gt;This tells IPtables to rewrite every packet going to 10.220.123.72, and actually send it to 10.8.0.24, on ports 9200 and 9300, and it further instructs all packets to 10.220.123.72 to go via the tun interface.&lt;/p&gt;
+
+&lt;p&gt;You should be able to test this again with &lt;code&gt;curl http://10.220.123.72:9200&lt;/code&gt; on a machine in the &amp;#8216;new cluster&amp;#8217;. That command won&amp;#8217;t work without iptables, but will work WITH iptables.&lt;/p&gt;
+
+&lt;h2 id='turn_it_all_on'&gt;Turn it all on&lt;/h2&gt;
+
+&lt;p&gt;Watch the elasticsearch logs for errors! This is the stage where everything can break.&lt;/p&gt;
+
+&lt;p&gt;Edit the elasticsearch config on each of the &amp;#8216;old&amp;#8217; machines. Beware, it appears that editing the files will dynamically reload the config. If you&amp;#8217;re using unicast, you want to change the addresses to match those of your openVPN network (10.8.0.4, 10.8.0.8, etc). Don&amp;#8217;t add the new IPs yet, just the 10.8x versions of the existing cluster. Once that&amp;#8217;s working and you&amp;#8217;ve verified that traffic is flowing over the VPN, modify your elasticsearch config again to increase the number of expected nodes.&lt;/p&gt;
+
+&lt;p&gt;Elasticsearch will magically re-allocate your data onto the new cluster. This might take hours for everything to go green again. In the meantime, you can set up HAProxy as a simple wrapper of SSL and basic auth on the &amp;#8216;new&amp;#8217; cluster nodes so your app servers can gain access.&lt;/p&gt;
+
+&lt;p&gt;I used a fairly standard HAProxy install; ensure you have HTTP Basic Auth (user/pass, to authorize your app) as well as SSL (https, to encrypt communication over the wire). Test that you can access the new elasicsearch servers using their public address from your app servers. (We had to patch the gem we use for Elasticsearch to accept https and basic-auth; you may need to upgrade or patch it yourself also.)&lt;/p&gt;
+
+&lt;p&gt;So, before we pull the big switch o&amp;#8217; doom, verify the following:&lt;/p&gt;
+
+&lt;ul&gt;
+&lt;li&gt;cluster is green with old and new servers&lt;/li&gt;
+
+&lt;li&gt;app servers can communicate with the new cluster via https and basic auth and the old cluster with straight http&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Modify your app server config to point at only the new servers and restart them. Traffic should now be directly between app servers and new cluster over TCP and http, using the public IP addresses (not openVPN).&lt;/p&gt;
+
+&lt;p&gt;Decrease the number of expected nodes in your elasticsearch cluster by 1 and shut down one of the &amp;#8216;old&amp;#8217; servers&amp;#8217; elasticsearch process. Wait for it all to go green again. Repeat until there no more left running on the old cluster. Now you can shut down openVPN, terminate the openvpn server, and the old machines, and go get drunk.&lt;/p&gt;</description>
+                <link>http://c3x.me/code/2013/02/24/bridging-aws-security-groups-with-openvpn-for-elasticsearch</link>
+                <guid>http://c3x.me/code/2013/02/24/bridging-aws-security-groups-with-openvpn-for-elasticsearch</guid>
+                <pubDate>2013-02-24T00:00:00-08:00</pubDate>
+        </item>
+
+
+</channel>
+</rss>

@@ -1,0 +1,349 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Bridging AWS security groups with OpenVPN, for ElasticSearch</title>
+    <meta name="description" content="">
+    <meta name="author" content="court3nay">
+
+    <!-- Enable responsive viewport -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Le HTML5 shim, for IE6-8 support of HTML elements -->
+    <!--[if lt IE 9]>
+      <script src="http://html5shim.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+
+    <link href='http://fonts.googleapis.com/css?family=Armata|Source+Code+Pro' rel='stylesheet' type='text/css'>
+
+
+    <!-- Le styles -->
+    <link href="/assets/themes/twitter_custom/bootstrap/css/bootstrap.2.2.2.min.css" rel="stylesheet">
+    <link href="/assets/themes/twitter_custom/css/style.css?body=1" rel="stylesheet" type="text/css" media="all">
+
+    <link href="/assets/themes/twitter_custom/css/custom.css" rel="stylesheet">
+    <!-- Le fav and touch icons -->
+  <!-- Update these with your own images
+    <link rel="shortcut icon" href="images/favicon.ico">
+    <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="images/apple-touch-icon-72x72.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="images/apple-touch-icon-114x114.png">
+  -->
+
+    <!-- atom & rss feed -->
+    <link href="/atom.xml" type="application/atom+xml" rel="alternate" title="Sitewide ATOM Feed">
+    <link href="/rss.xml" type="application/rss+xml" rel="alternate" title="Sitewide RSS Feed">
+
+
+    
+  </head>
+
+  <body>
+    <div class="navbar">
+      <div class="navbar-inner">
+        <div class="container-narrow">
+          <a class="brand" href="/">c3x.me</a>
+          <ul class="nav">
+            
+            
+            
+
+
+  
+    
+      
+    
+  
+    
+      
+      	
+      	<li><a href="/archive.html">Archive</a></li>
+      	
+      
+    
+  
+    
+      
+    
+  
+    
+      
+      	
+      	<li><a href="/categories.html">Categories</a></li>
+      	
+      
+    
+  
+    
+      
+    
+  
+    
+      
+      	
+      	<li><a href="/pages.html">Pages</a></li>
+      	
+      
+    
+  
+    
+      
+    
+  
+    
+      
+    
+  
+    
+      
+      	
+      	<li><a href="/tags.html">Tags</a></li>
+      	
+      
+    
+  
+
+
+
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="container-narrow">
+
+      <div class="content">
+        
+<div class="page-header">
+  <h1>Bridging AWS security groups with OpenVPN, for ElasticSearch </h1>
+</div>
+
+<div class="row-fluid post-full">
+  <div class="span12">
+    <dl class="tag_box dl-horizontal">
+    
+      <dt><i class="icon-folder-open"></i>
+      <dd>
+        <ul class="unstyled">
+        
+        
+
+
+  
+     
+    	<li><a href="/categories.html#code-ref">
+    		code <span class="badge badge-info">1</span>
+    	</a></li>
+    
+  
+
+
+        </ul>
+      </dd>
+
+      
+    
+        <dt><i class="icon-tags"></i></dt>
+        <dd>
+          <ul class="unstyled">
+        
+        
+
+
+  
+     
+    	<li><a href="/tags.html#sysadmin-ref">sysadmin <span class="badge badge-info">1</span></a></li>
+     
+    	<li><a href="/tags.html#elasticsearch-ref">elasticsearch <span class="badge badge-info">1</span></a></li>
+     
+    	<li><a href="/tags.html#openvpn-ref">openvpn <span class="badge badge-info">1</span></a></li>
+    
+  
+
+
+
+        </ul>
+        </dd>
+      
+    </dl>
+
+    <div class="date">
+      <span>24 February 2013</strong>
+    </div>
+
+    <div class="content">
+      <div class='intro'>
+<p>Recently we moved a bunch of infrastructure off EngineYard onto AWS. If you&#8217;re not familiar, EngineYard is a platform which itself is hosted on AWS. We had our entire stack (including elasticsearch) hosted with them, but they didn&#8217;t support elasticsearch and so we were effectively paying a 2-3x premium (!) for the convenience of hosting and a simple-ish setup.</p>
+
+<p>The goal was to move the elasticsearch install onto our own raw AWS setup, thus saving about $1,500 per month (!) with no downtime. Here&#8217;s how I did it, and You Can Too(tm). This requires you to know how to install and run Chef recipes on at least one new box. Trust me, it&#8217;s faster to set up a hosted chef account with opscode, and get it working, than it is to figure out how to install OpenVPN with self-signed CA and certs.</p>
+
+<p><a href='http://elasticsearch.org'>Elasticsearch</a> is a tricky customer because it has a discovery protocol where it communicates its public IP address with other nodes in the cluster, and you can&#8217;t easily configure how this happens. I couldn&#8217;t find any other documentation or posts about the topic, so I&#8217;m recording it for posterity here. It also is completely unsecure, which means, opening it up to the wider internet is Very Bad. It communicates to your app over http (port 9200) and with itself over TCP (9300), so we can&#8217;t just use http-auth and SSL. So, openVPN.</p>
+
+<p>This technique is usable any other time you want to bridge security groups where you don&#8217;t own them all, but have ssh/root access to the individual servers. (AWS allows you to open up ports between your own groups)</p>
+</div><div class='tldr'>
+<h2>Overview</h2>
+
+<p>We&#8217;re going to set up a routed-tunnel openVPN network, set up new elasticsearch servers outside the security group, then tweak elasticsearch to gossip/communicate with its other nodes with some IPtables routing tricks. Finally, we&#8217;ll secure the new install with HAproxy.</p>
+</div>
+<h2 id='openvpn'>OpenVPN</h2>
+
+<p>OpenVPN is fantastic, but complex. It creates a virtual network on any set of machines that can communicate with each other over TCP. It creates a new virtual network card (interface) with its own new IP address, so you can seamlessly communicate as though all machines were on a local network together. You can <a href='http://openvpn.net/index.php/open-source/documentation/howto.html'>read all about it</a> at their excellent site, but I&#8217;ve saved you most of the work here below.</p>
+
+<p>The easiest way to install it is via the <a href='http://community.opscode.com/cookbooks/openvpn'>Chef recipe</a> - this recipe solves most of the issues you&#8217;ll have generating certificate authorities and keys and so on. If you are a glutton for punishment, you will need to create a bunch of self-signed certs, and have a signing authority working. I tried to do this for a whole day and ended up with the chef recipe that does it magically.</p>
+
+<p>So, first you set up the openVPN server. This box will be the conduit for all traffic. In our testing, a small instance was big enough for a cluster of three 2XL machines running at about 20% load. Let&#8217;s assume you have your chef recipes uploaded and working with knife, and that we&#8217;re using chef-solo and the hosted solution.</p>
+
+<pre><code>[dev] $ knife ec2 server create -f m1.small -I ami-3d4ff254 -N openvpn --sudo</code></pre>
+
+<p>(be sure and apt-get update and apt-get upgrade before you do anything)</p>
+
+<p>To install the openVPN server, you just set the node&#8217;s run_list to recipe<span>openvpn</span>.</p>
+
+<pre><code>[dev] $ knife node run_list add openvpn &#39;recipe[openvpn],recipe[openvpn::users]&#39;</code></pre>
+
+<p>Create a data bag called &#8220;users&#8221;, so that it looks like this</p>
+
+<pre><code>[dev] $ knife data bag create users elast1</code></pre>
+
+<p>With the contents consisting of only an <code>id</code></p>
+
+<pre><code>{ id: &quot;elast1&quot; }</code></pre>
+
+<p>Create a users data bag for each of your &#8216;old&#8217; servers (elast1, elast2, etc), and a bag for each of your new servers.</p>
+
+<p>Now, run <code>chef-solo</code> on your openvpn server and it should install and create a bunch of .tgz files, one for each client machine, in <code>/etc/openvpn/keys</code>.</p>
+
+<p>Make sure it all starts up OK (<code>sudo /etc/init.d/openvpn start</code> and <code>sudo ifconfig</code> should show a &#8220;tun&#8221; interface with IP of 10.8.0.0), and then we can install the clients.</p>
+
+<p>Now edit the security group (in the AWS web app) and open port 1194 TCP for this machine.</p>
+
+<h2 id='openvpn_clients'>OpenVPN Clients</h2>
+
+<p>Now, on your &#8216;old&#8217; machines, you want to set up openVPN clients. We don&#8217;t need chef here; it&#8217;s a one-liner, and these boxes are going to die soon anyway. (EngineYard uses gentoo, so we need emerge. You may need to unfuck their packages.mask)</p>
+
+<pre><code>sudo emerge openvpn</code></pre>
+
+<p>Now, you want to edit /etc/openvpn/cilent.conf and set it to someting like this:</p>
+
+<pre><code>client
+
+dev tun
+proto udp
+port 1194
+persist-tun
+persist-key
+keepalive 10 60
+
+remote ec2-12-34-56.compute-1.amazonaws.com 1194
+
+cert /etc/openvpn/keys/elast1.crt
+key  /etc/openvpn/keys/elast1.key
+ca   /etc/openvpn/keys/ca.crt
+
+comp-lzo
+
+tls-auth /etc/openvpn/keys/ta.key 1</code></pre>
+
+<p>..replacing the compute-1 address with that of your openvpn server. Copy the tgz of certificate files you just generated with the chef-solo run from the server and unzip them. You also need to copy ta.key from the server.</p>
+
+<p>Now, start openvpn on the client, and it should magically work; check <code>sudo ifconfig</code> and see if you have an ip address (again, in the range 10.8.0.x). You should be able to ping 10.8.0.1. You should also be able to <code>curl http://10.8.0.4:9200</code> (replace with actual IP of another elasticsearch machine) and get results! Do this on each machine, and note their individual IP addresses for this new interface.</p>
+
+<h2 id='new_boxes'>New boxes</h2>
+
+<p>Now, setup some new machines in your own AWS account with elasticsearch on them (no data yet). Install openVPN on them, the same as above. You should be able to curl the elasticsearch on the &#8216;old&#8217; machines via their new 10.8.x IP addresses.</p>
+
+<p>Next we need to do some magic. Because Elasticsearch likes to communicate on startup and give out its own &#8216;real&#8217; IP address, you want to trick the machines into communicating. The most evil way is with IPtables (note: you should read up on IPtables and how to save/load it on restart)</p>
+
+<p>Make a list of every IP address: the amazon IP (looks something like 10.220.123.82) with its corresponding vpn IP (looks like 10.8.0.24). On each client machine, you want to run this set of commands for each pair other than the current box (as root).</p>
+
+<pre><code># iptables -t nat -A OUTPUT -d 10.220.123.72/32 -p tcp -m tcp --dport 9200 -j DNAT --to-destination 10.8.0.24:9200
+# iptables -t nat -A OUTPUT -d 10.220.123.72/32 -p tcp -m tcp --dport 9300 -j DNAT --to-destination 10.8.0.24:9300
+# iptables -t nat -A OUTPUT -d 10.220.123.72/32 -p udp -m udp --dport 9300 -j DNAT --to-destination 10.8.0.24:9300
+# ip route add 10.220.123.72/32 dev tun0</code></pre>
+
+<p>This tells IPtables to rewrite every packet going to 10.220.123.72, and actually send it to 10.8.0.24, on ports 9200 and 9300, and it further instructs all packets to 10.220.123.72 to go via the tun interface.</p>
+
+<p>You should be able to test this again with <code>curl http://10.220.123.72:9200</code> on a machine in the &#8216;new cluster&#8217;. That command won&#8217;t work without iptables, but will work WITH iptables.</p>
+
+<h2 id='turn_it_all_on'>Turn it all on</h2>
+
+<p>Watch the elasticsearch logs for errors! This is the stage where everything can break.</p>
+
+<p>Edit the elasticsearch config on each of the &#8216;old&#8217; machines. Beware, it appears that editing the files will dynamically reload the config. If you&#8217;re using unicast, you want to change the addresses to match those of your openVPN network (10.8.0.4, 10.8.0.8, etc). Don&#8217;t add the new IPs yet, just the 10.8x versions of the existing cluster. Once that&#8217;s working and you&#8217;ve verified that traffic is flowing over the VPN, modify your elasticsearch config again to increase the number of expected nodes.</p>
+
+<p>Elasticsearch will magically re-allocate your data onto the new cluster. This might take hours for everything to go green again. In the meantime, you can set up HAProxy as a simple wrapper of SSL and basic auth on the &#8216;new&#8217; cluster nodes so your app servers can gain access.</p>
+
+<p>I used a fairly standard HAProxy install; ensure you have HTTP Basic Auth (user/pass, to authorize your app) as well as SSL (https, to encrypt communication over the wire). Test that you can access the new elasicsearch servers using their public address from your app servers. (We had to patch the gem we use for Elasticsearch to accept https and basic-auth; you may need to upgrade or patch it yourself also.)</p>
+
+<p>So, before we pull the big switch o&#8217; doom, verify the following:</p>
+
+<ul>
+<li>cluster is green with old and new servers</li>
+
+<li>app servers can communicate with the new cluster via https and basic auth and the old cluster with straight http</li>
+</ul>
+
+<p>Modify your app server config to point at only the new servers and restart them. Traffic should now be directly between app servers and new cluster over TCP and http, using the public IP addresses (not openVPN).</p>
+
+<p>Decrease the number of expected nodes in your elasticsearch cluster by 1 and shut down one of the &#8216;old&#8217; servers&#8217; elasticsearch process. Wait for it all to go green again. Repeat until there no more left running on the old cluster. Now you can shut down openVPN, terminate the openvpn server, and the old machines, and go get drunk.</p>
+    </div>
+
+    <hr>
+    <div class="pagination">
+      <ul>
+      
+        <li class="prev disabled"><a>&larr; Previous</a></li>
+      
+        <li><a href="/archive.html">Archive</a></li>
+      
+        <li class="next disabled"><a>Next &rarr;</a>
+      
+      </ul>
+    </div>
+    <hr>
+    
+
+
+  <div id="disqus_thread"></div>
+<script type="text/javascript">
+    var disqus_developer = 1;
+    var disqus_shortname = 'c3xme'; // required: replace example with your forum shortname
+    
+    /* * * DON'T EDIT BELOW THIS LINE * * */
+    (function() {
+        var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+        dsq.src = 'http://' + disqus_shortname + '.disqus.com/embed.js';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+<a href="http://disqus.com" class="dsq-brlink">blog comments powered by <span class="logo-disqus">Disqus</span></a>
+
+
+
+
+  </div>
+</div>
+
+      </div>
+      <hr>
+      <footer>
+        <p>
+            <a href="/about.html">about the author</a> &bull; 
+            <a href="http://twitter.com/court3nay">@court3nay on twitter</a> &bull; 
+            <a href="http://github.com/courtenay">courtenay at github</a> &bull;
+            <a href="http://soundcloud.com/f3mr">f3mr on soundcloud</a>
+        </p>
+        <p>&copy; 2013 court3nay
+          - another fucking <a href="http://jekyllbootstrap.com" target="_blank" title="The Definitive Jekyll Blogging Framework">Jekyll Bootstrap</a>
+          and <a href="http://twitter.github.com/bootstrap/" target="_blank">Twitter Bootstrap</a> site.
+        </p>
+      </footer>
+
+    </div>
+
+    
+  </body>
+</html>
+

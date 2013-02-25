@@ -1,0 +1,97 @@
+
+body {
+  line-height: 1.6em 
+}
+
+div.thumb img {
+  width: 300px;
+  padding: 10px;
+  border: 1px solid #ccc;
+}
+
+h1, h2, h3, h4 {
+  font-family: 'Armata', Helvetica, sans-serif;
+  line-height: 1.4em;
+  color: #aaa;
+}
+h1 {
+  background : #cce;
+  padding: 10px 40px;
+  border-radius: 5px;
+  color: #fff;
+}
+
+
+div.tldr {
+  font-size: 120%;
+  background: #cce;
+  margin-bottom: 40px;
+  padding: 10px 40px 20px 40px;
+  border-radius: 5px;
+}
+div.tldr h2 {
+  color: #fff;
+}
+div.intro {
+  color: #666;
+  line-height: 1.4em;
+  margin-bottom: 2em;
+}
+
+pre code {
+  width: 200% !important;
+  white-space: pre;
+  word-wrap: normal;
+  padding-bottom: 16px;
+}
+pre {
+  overflow: auto;
+}
+
+footer p {
+  color: #aaa;
+}
+footer p a {
+  color: #aaf;
+}
+
+a {
+  text-decoration: underline;
+}
+
+div.content {
+  border-bottom: 10px solid #efefef;
+  margin: 40px 0;
+}
+
+.tag_box {
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  width: 200px;
+  padding: 10px;
+  float: right;
+  display: block;
+  margin: 10px;
+}
+.tag_box dt {
+  width: auto;
+  padding-top: 10px;
+}
+.tag_box dd {
+  margin-left: 20px;
+}
+.tag_box span.badge {
+ opacity: 0.5;
+ position: absolute;
+ right: 10px;
+ top: 10px;
+}
+.tag_box li {
+  position: relative;
+  width: 180px;
+}
+.tag_box li a {
+  border: none;
+  display: block;
+  width: 90%;
+}
