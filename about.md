@@ -16,7 +16,7 @@ I wear a lot of hats. I'm mainly a sociopathic weirdo, but I am also known as a 
 I look vaguely like one of these images, depending on mood and access to scissors: 
 
 <div class="thumb" markdown="1">
-  ![](/assets/images/c3-business.png)
+  ![](/assets/images/c3-business.jpg)
   ![](/assets/images/c3.daniel.jpg)
   ![](/assets/images/bm.jpg)
   ![](/assets/images/kitty.jpg)
